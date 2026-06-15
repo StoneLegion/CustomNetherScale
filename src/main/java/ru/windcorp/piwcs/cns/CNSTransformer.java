@@ -21,6 +21,11 @@ public class CNSTransformer implements IClassTransformer {
 	public static final String TARGET_METHOD_MCP  = "getMovementFactor";
 	public static final String TARGET_METHOD_SRG  = "getMovementFactor"; // Forge method
 	public static final String TARGET_METHOD_DESC = "()D";
+
+	public static final String TRANSFER_TARGET_CLASS       = "net.minecraft.server.management.ServerConfigurationManager";
+	public static final String TRANSFER_TARGET_METHOD_MCP  = "transferEntityToWorld";
+	public static final String TRANSFER_TARGET_METHOD_SRG  = "func_82448_a";
+	public static final String TRANSFER_TARGET_METHOD_DESC = "(Lnet/minecraft/entity/Entity;ILnet/minecraft/world/WorldServer;Lnet/minecraft/world/WorldServer;Lnet/minecraft/world/Teleporter;)V";
 	
 	/*
 	 * DESTINATION constants represent the method redirect to
@@ -32,14 +37,21 @@ public class CNSTransformer implements IClassTransformer {
 	@Override
 	public byte[] transform(String name, String transformedName, byte[] basicClass) {
 		
-		if (!transformedName.equals(TARGET_CLASS)) {
-			return basicClass;
+		if (transformedName.equals(TARGET_CLASS)) {
+			return VisitorHelper.apply(basicClass, name, createTransformProvider(
+					ClassWriter.COMPUTE_FRAMES,
+					CNSClassVisitor::new
+			));
 		}
 		
-		return VisitorHelper.apply(basicClass, name, createTransformProvider(
-				ClassWriter.COMPUTE_FRAMES,
-				CNSClassVisitor::new
-		));
+		if (transformedName.equals(TRANSFER_TARGET_CLASS)) {
+			return VisitorHelper.apply(basicClass, name, createTransformProvider(
+					ClassWriter.COMPUTE_FRAMES,
+					CNSTransferClassVisitor::new
+			));
+		}
+
+		return basicClass;
 		
 	}
 	
@@ -59,7 +71,7 @@ public class CNSTransformer implements IClassTransformer {
 	 * Converts the given Fully Qualified Name of a class into a binary class name,
 	 * as described in
 	 * <a href="https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.2.1">
-	 * § 4.2.1 of Java Virtual Machine Specification</a>.
+	 * Section 4.2.1 of Java Virtual Machine Specification</a>.
 	 * <p>
 	 * <i>Example</i>:<br />
 	 * {@code toBinaryName("java.lang.Thread")} = {@code "java/lang/Thread"}
@@ -74,7 +86,7 @@ public class CNSTransformer implements IClassTransformer {
 	 * Converts the given Fully Qualified Name of a class into a FieldType,
 	 * as described in
 	 * <a href="https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.3.2">
-	 * § 4.3.2 of Java Virtual Machine Specification</a>.
+	 * Section 4.3.2 of Java Virtual Machine Specification</a>.
 	 * <p>
 	 * <i>Example</i>:<br />
 	 * {@code toBinaryName("java.lang.Thread")} = {@code "Ljava/lang/Thread;"}
@@ -126,7 +138,49 @@ public class CNSTransformer implements IClassTransformer {
 			}
 		}
 	}
-	
+
+	private static class CNSTransferClassVisitor extends ClassVisitor {
+
+		private final AdvancedMethodMatcher targetMethodMatcher;
+
+		private boolean patchApplied = false;
+
+		public CNSTransferClassVisitor(String obfuscatedName, ClassVisitor cv) {
+			super(Opcodes.ASM5, cv);
+
+			this.targetMethodMatcher = new AdvancedMethodMatcher(
+					obfuscatedName,
+					TRANSFER_TARGET_METHOD_DESC,
+					TRANSFER_TARGET_METHOD_MCP,
+					TRANSFER_TARGET_METHOD_SRG
+			);
+		}
+
+		@Override
+		public MethodVisitor visitMethod(int access, String name, String desc, String signature, String[] exceptions) {
+
+			MethodVisitor superVisitor = super.visitMethod(access, name, desc, signature, exceptions);
+
+			if (targetMethodMatcher.match(name, desc)) {
+				patchApplied = true;
+				return new CNSTransferMethodVisitor(superVisitor);
+			}
+
+			return superVisitor;
+		}
+
+		@Override
+		public void visitEnd() {
+			super.visitEnd();
+
+			if (patchApplied) {
+				Log.debug("[Custom Nether Scale] Transfer patch applied");
+			} else {
+				Log.severe("[Custom Nether Scale] Transfer patch not applied, mod may not work on GTNH 2.9+");
+			}
+		}
+	}
+		
 	private static class CNSMethodVisitor extends MethodVisitor {
 
 		public CNSMethodVisitor(MethodVisitor mv) {
@@ -146,6 +200,34 @@ public class CNSTransformer implements IClassTransformer {
 			super.visitInsn(Opcodes.DRETURN); // Return the value that destination method returned
 		}
 		
+	}
+
+	private static class CNSTransferMethodVisitor extends MethodVisitor {
+
+		private boolean patchedRatio = false;
+
+		public CNSTransferMethodVisitor(MethodVisitor mv) {
+			super(Opcodes.ASM5, mv);
+		}
+
+		@Override
+		public void visitVarInsn(int opcode, int var) {
+			super.visitVarInsn(opcode, var);
+
+			if (!patchedRatio && opcode == Opcodes.DSTORE && var == 8) {
+				super.visitVarInsn(Opcodes.ALOAD, 3);
+				super.visitVarInsn(Opcodes.ALOAD, 4);
+				super.visitMethodInsn(
+						Opcodes.INVOKESTATIC,
+						toBinaryName(DESTINATION_CLASS),
+						"getTransferRatio",
+						"(Lnet/minecraft/world/WorldServer;Lnet/minecraft/world/WorldServer;)D",
+						false
+				);
+				super.visitVarInsn(Opcodes.DSTORE, 8);
+				patchedRatio = true;
+			}
+		}
 	}
 
 }

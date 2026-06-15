@@ -3,6 +3,7 @@ package ru.windcorp.piwcs.cns;
 import cpw.mods.fml.common.Mod;
 import net.minecraft.world.WorldProvider;
 import net.minecraft.world.WorldProviderHell;
+import net.minecraft.world.WorldServer;
 
 public class CNSHooks {
 	
@@ -15,6 +16,10 @@ public class CNSHooks {
 		}
 		
 		return 1.0;
+	}
+
+	public static double getTransferRatio(WorldServer source, WorldServer target) {
+		return getScale(source.provider) / getScale(target.provider);
 	}
 
 }
